@@ -1,95 +1,198 @@
 'use client';
 
 import { useState } from 'react';
-import {
-  PaymentElement,
-  AddressElement,
-  useStripe,
-  useElements,
-} from '@stripe/react-stripe-js';
+import { useRouter } from 'next/navigation';
+import { ShieldCheck, Loader2 } from 'lucide-react';
 import { useCart } from '@/context/CartContext';
 import { formatPrice } from '@/data/currencies';
-import { ShieldCheck, Loader2 } from 'lucide-react';
+
+declare global {
+  interface Window {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    Razorpay: any;
+  }
+}
+
+interface CustomerDetails {
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+}
 
 export default function CheckoutForm() {
-  const stripe = useStripe();
-  const elements = useElements();
   const { subtotal, currency, items, clearCart } = useCart();
-
+  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [customer, setCustomer] = useState<CustomerDetails>({
+    name: '',
+    email: '',
+    phone: '',
+    address: '',
+  });
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setCustomer((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  };
+
+  const handlePay = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!stripe || !elements) return;
-
-    setLoading(true);
     setError(null);
 
-    const { error: submitError } = await elements.submit();
-    if (submitError) {
-      setError(submitError.message || 'Validation failed');
-      setLoading(false);
+    if (!customer.name || !customer.email || !customer.phone) {
+      setError('Please fill in all required fields.');
       return;
     }
 
-    // Create payment intent
-    const res = await fetch('/api/create-payment-intent', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items, currency }),
-    });
+    setLoading(true);
 
-    if (!res.ok) {
-      const data = await res.json();
-      setError(data.error || 'Failed to initialize payment');
+    try {
+      // Step 1: Create Razorpay order on server
+      const res = await fetch('/api/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items, currency }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to create order');
+      }
+
+      const { orderId, amount, currency: orderCurrency } = await res.json();
+
+      // Step 2: Open Razorpay checkout modal
+      const options = {
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+        amount,
+        currency: orderCurrency,
+        name: 'HomeFood Artisan Kitchen',
+        description: 'Homemade Sweets & Snacks Order',
+        image: '/logo.png',
+        order_id: orderId,
+        prefill: {
+          name: customer.name,
+          email: customer.email,
+          contact: customer.phone,
+        },
+        notes: { address: customer.address },
+        theme: { color: '#ff7d0f' },
+        modal: { ondismiss: () => setLoading(false) },
+        handler: async (response: {
+          razorpay_payment_id: string;
+          razorpay_order_id: string;
+          razorpay_signature: string;
+        }) => {
+          // Step 3: Verify payment on server
+          const verifyRes = await fetch('/api/verify-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(response),
+          });
+
+          if (verifyRes.ok) {
+            clearCart();
+            router.push('/order-success');
+          } else {
+            setError('Payment verification failed. Please contact support.');
+            setLoading(false);
+          }
+        },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.on('payment.failed', (response: { error: { description: string } }) => {
+        setError(response.error.description || 'Payment failed. Please try again.');
+        setLoading(false);
+      });
+      rzp.open();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong');
       setLoading(false);
-      return;
     }
-
-    const { clientSecret } = await res.json();
-
-    const { error: confirmError } = await stripe.confirmPayment({
-      elements,
-      clientSecret,
-      confirmParams: {
-        return_url: `${window.location.origin}/order-success`,
-      },
-    });
-
-    if (confirmError) {
-      setError(confirmError.message || 'Payment failed');
-    } else {
-      clearCart();
-    }
-
-    setLoading(false);
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      {/* Shipping address */}
+    <form onSubmit={handlePay} className="space-y-5">
+      {/* Customer details */}
       <div>
-        <h3 className="font-semibold text-warm-800 mb-3">Shipping Address</h3>
-        <AddressElement
-          options={{
-            mode: 'shipping',
-            allowedCountries: ['US', 'GB', 'IN'],
-            fields: { phone: 'always' },
-            validation: { phone: { required: 'always' } },
-          }}
-        />
+        <h3 className="font-semibold text-warm-800 mb-4">Your Details</h3>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-warm-700 mb-1">
+              Full Name <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              name="name"
+              value={customer.name}
+              onChange={handleChange}
+              placeholder="John Smith"
+              required
+              className="w-full px-4 py-2.5 border border-warm-200 rounded-xl text-sm text-warm-800 placeholder-warm-400 focus:outline-none focus:ring-2 focus:ring-brand-400"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-warm-700 mb-1">
+              Email Address <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="email"
+              name="email"
+              value={customer.email}
+              onChange={handleChange}
+              placeholder="you@example.com"
+              required
+              className="w-full px-4 py-2.5 border border-warm-200 rounded-xl text-sm text-warm-800 placeholder-warm-400 focus:outline-none focus:ring-2 focus:ring-brand-400"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-warm-700 mb-1">
+              Phone Number <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="tel"
+              name="phone"
+              value={customer.phone}
+              onChange={handleChange}
+              placeholder="+91 98765 43210"
+              required
+              className="w-full px-4 py-2.5 border border-warm-200 rounded-xl text-sm text-warm-800 placeholder-warm-400 focus:outline-none focus:ring-2 focus:ring-brand-400"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-warm-700 mb-1">
+              Delivery Address
+            </label>
+            <textarea
+              name="address"
+              value={customer.address}
+              onChange={handleChange}
+              rows={3}
+              placeholder="House/Flat no., Street, City, PIN/ZIP code, Country"
+              className="w-full px-4 py-2.5 border border-warm-200 rounded-xl text-sm text-warm-800 placeholder-warm-400 focus:outline-none focus:ring-2 focus:ring-brand-400 resize-none"
+            />
+          </div>
+        </div>
       </div>
 
-      {/* Payment */}
-      <div>
-        <h3 className="font-semibold text-warm-800 mb-3">Payment Details</h3>
-        <PaymentElement
-          options={{
-            layout: 'tabs',
-            paymentMethodOrder: ['card', 'upi', 'google_pay', 'apple_pay'],
-          }}
-        />
+      {/* Payment methods info */}
+      <div className="p-4 bg-warm-50 rounded-xl border border-warm-100">
+        <p className="text-xs font-semibold text-warm-600 mb-2">Accepted payment methods</p>
+        <div className="flex flex-wrap gap-2">
+          {['UPI', 'Cards', 'Net Banking', 'Wallets', 'EMI', 'Paytm', 'PhonePe', 'GPay'].map((m) => (
+            <span key={m} className="text-xs bg-white border border-warm-200 text-warm-600 px-2 py-1 rounded">
+              {m}
+            </span>
+          ))}
+        </div>
+        <p className="text-xs text-warm-400 mt-2">
+          International cards (Visa, Mastercard) accepted for USA & UK customers
+        </p>
       </div>
 
       {error && (
@@ -98,30 +201,28 @@ export default function CheckoutForm() {
         </div>
       )}
 
-      <div className="pt-2">
-        <button
-          type="submit"
-          disabled={loading || !stripe || !elements}
-          className="w-full flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-600 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-4 rounded-xl transition-colors text-lg"
-        >
-          {loading ? (
-            <>
-              <Loader2 className="w-5 h-5 animate-spin" />
-              Processing...
-            </>
-          ) : (
-            <>
-              <ShieldCheck className="w-5 h-5" />
-              Pay {formatPrice(subtotal, currency)}
-            </>
-          )}
-        </button>
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-600 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-4 rounded-xl transition-colors text-lg"
+      >
+        {loading ? (
+          <>
+            <Loader2 className="w-5 h-5 animate-spin" />
+            Opening Payment...
+          </>
+        ) : (
+          <>
+            <ShieldCheck className="w-5 h-5" />
+            Pay {formatPrice(subtotal, currency)}
+          </>
+        )}
+      </button>
 
-        <p className="text-center text-xs text-warm-400 mt-3 flex items-center justify-center gap-1.5">
-          <ShieldCheck className="w-3.5 h-3.5" />
-          Secured by Stripe · 256-bit SSL encryption
-        </p>
-      </div>
+      <p className="text-center text-xs text-warm-400 flex items-center justify-center gap-1.5">
+        <ShieldCheck className="w-3.5 h-3.5" />
+        Secured by Razorpay · 256-bit SSL encryption
+      </p>
     </form>
   );
 }

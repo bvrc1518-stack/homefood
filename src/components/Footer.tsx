@@ -82,9 +82,9 @@ export default function Footer() {
 
             {/* Payment badges */}
             <div className="mt-5">
-              <p className="text-xs text-warm-500 mb-2">Secure payments via</p>
+              <p className="text-xs text-warm-500 mb-2">Secure payments via Razorpay</p>
               <div className="flex gap-2 flex-wrap">
-                {['Visa', 'Mastercard', 'Amex', 'UPI'].map((p) => (
+                {['UPI', 'Cards', 'Net Banking', 'Wallets', 'EMI'].map((p) => (
                   <span
                     key={p}
                     className="px-2 py-1 bg-warm-800 text-warm-300 text-xs rounded border border-warm-700"

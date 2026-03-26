@@ -146,11 +146,11 @@ export default function CartPage() {
 
             <div className="flex items-center justify-center gap-2 mt-4 text-xs text-warm-400">
               <ShieldCheck className="w-4 h-4" />
-              <span>Secure checkout powered by Stripe</span>
+              <span>Secure checkout powered by Razorpay</span>
             </div>
 
-            <div className="mt-4 flex justify-center gap-3 text-warm-300">
-              {['Visa', 'MC', 'Amex', 'UPI'].map((p) => (
+            <div className="mt-4 flex justify-center gap-3 text-warm-300 flex-wrap">
+              {['UPI', 'Cards', 'Wallets', 'EMI'].map((p) => (
                 <span key={p} className="text-xs border border-warm-200 px-2 py-0.5 rounded text-warm-500">
                   {p}
                 </span>
